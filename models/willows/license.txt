@@ -1,0 +1,11 @@
+Model Information:
+* title:	Willow's Lightcycle
+* source:	https://sketchfab.com/3d-models/willows-lightcycle-f235e7bd4d7a4a1ea9c1943cfd456137
+* author:	SpringSociety (https://sketchfab.com/jcreadingtutor)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Willow's Lightcycle" (https://sketchfab.com/3d-models/willows-lightcycle-f235e7bd4d7a4a1ea9c1943cfd456137) by SpringSociety (https://sketchfab.com/jcreadingtutor) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

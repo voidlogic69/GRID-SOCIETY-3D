@@ -1,0 +1,6 @@
+3D models (Sketchfab):
+- "Super Lightcycle", "Willow's Lightcycle", "Lightcycle arena", "Tron Race Arena" by SpringSociety (https://sketchfab.com/jcreadingtutor) - CC BY 4.0
+- "TRON: Uprising - ArgonCity Light Cycle" by TheTinDog (https://sketchfab.com/simysimes) - CC BY 4.0
+- "Elite/Black Guard Lightcycle Low Poly" by Shriker1 (https://sketchfab.com/Shriker1) - CC BY 4.0
+- "Agile Lightcycle | Tron Evolution Battle Grids" by Shriker1 (https://sketchfab.com/Shriker1) - Sketchfab Standard license
+Each model folder also contains its original license.txt.
