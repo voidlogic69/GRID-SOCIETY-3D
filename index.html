@@ -877,6 +877,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const params = new URLSearchParams(location.search);
 const FLIP = new Set((params.get('flip') || '').split(',').filter(Boolean));
 const UPSIDE = new Set((params.get('upside') || '').split(',').filter(Boolean));
+// MANUAL TILT TEST:  ?rot=kra:90,0,0|yellow:0,0,90   (degrees: pitch,yaw,roll in bike space)
+const ROT = {}; (params.get('rot') || '').split('|').forEach(s => { const a = s.split(':'); if (a.length === 2) ROT[a[0]] = a[1].split(',').map(Number); });
 
 // ---------- user settings (saved in localStorage) ----------
 const SAVE_KEY = 'gs3d_settings_v2';
@@ -1040,12 +1042,14 @@ function recolorModel(root, glowHex, def) {
 // =====================================================================
 //  MODEL LOADING  (bikes + scenery are optional: procedural fallbacks)
 // =====================================================================
+// L = axis the bike's length runs along in the raw model, sF = +1/-1 (which end is the FRONT)
+// H = axis that points UP in the raw model, sU = +1/-1 (set -1 if the bike is upside-down)
 const MODEL_DEFS = {
   willows: { dir: 'models/willows/', L: 'z', sF: 1, H: 'y', sU: 1, length: 3.5 },
   yellow:  { dir: 'models/yellow/',  L: 'z', sF: 1, H: 'y', sU: 1, length: 3.5 },
   purple:  { dir: 'models/purple/',  L: 'z', sF: 1, H: 'y', sU: 1, length: 3.5 },
   super:   { dir: 'models/super/',   L: 'z', sF: 1, H: 'y', sU: 1, length: 3.5, hueBase: true },
-  kra:     { dir: 'models/kra1/',    L: 'y', sF: 1, H: 'z', sU: -1, length: 3.5 },
+  kra:     { dir: 'models/kra1/',    L: 'z', sF: 1, H: 'y', sU: 1, length: 3.5 },   // skinned model: axes are those of the POSED mesh (what you actually see)
 };
 const SCENERY_DEFS = { track: 'models/track/', arena: 'models/arena/' };
 const templates = {};
@@ -1053,7 +1057,7 @@ const sceneryRaw = {};
 let loadedCount = 0; const loadTotal = Object.keys(MODEL_DEFS).length + Object.keys(SCENERY_DEFS).length;
 function setLoadStatus() {
   const el = $('load-status'); if (!el) return;
-  el.textContent = loadedCount >= loadTotal ? '3D ASSETS READY' : 'LOADING 3D ASSETS ' + loadedCount + ' / ' + loadTotal;
+  el.textContent = loadedCount >= loadTotal ? '3D ASSETS READY · ORIENT-FIX v2' : 'LOADING 3D ASSETS ' + loadedCount + ' / ' + loadTotal;
 }
 function loadGLTF(dir) {
   return new Promise(res => {
@@ -1063,14 +1067,31 @@ function loadGLTF(dir) {
     } catch (e) { console.warn(e); res(null); }
   });
 }
+// Bounding box of what is actually RENDERED. three.js r147 Box3.setFromObject(precise) ignores skinning, which made the skinned Kra-1 model
+// get measured/rotated in its un-posed (standing-on-end) form. This applies the skeleton to every vertex first.
+function posedBox(root) {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3(), v = new THREE.Vector3();
+  root.traverse(o => {
+    if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+    const pos = o.geometry.attributes.position;
+    const bt = o.isSkinnedMesh && o.skeleton ? (o.applyBoneTransform ? 'applyBoneTransform' : (o.boneTransform ? 'boneTransform' : null)) : null;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      if (bt) o[bt](i, v);
+      v.applyMatrix4(o.matrixWorld); box.expandByPoint(v);
+    }
+  });
+  return box;
+}
 function buildTemplate(root, def, key) {
   const V3 = THREE.Vector3;
   const tmp = new THREE.Group(); tmp.add(root); tmp.updateMatrixWorld(true);
-  const ext = new THREE.Box3().setFromObject(tmp, true).getSize(new V3());
-  const arr = [['x', ext.x], ['y', ext.y], ['z', ext.z]].sort((a, b) => b[1] - a[1]);
-  const Lax = arr[0][0], Hax = arr[1][0];
-  let sF = def.sF, sU = def.sU;
-  if (Lax !== def.L || Hax !== def.H) { console.warn('axis mismatch for', key, Lax, Hax, 'expected', def.L, def.H); sF = 1; sU = 1; }
+  const ext = posedBox(tmp).getSize(new V3());
+  // FIX: always use the axes written in MODEL_DEFS. (Old code guessed 'up' as the 2nd-longest axis, but on
+  // willows/yellow/purple the handlebars are wider than the bike is tall, so it picked the side axis -> bikes lay on their side.)
+  const Lax = def.L, Hax = def.H;
+  const sF = def.sF, sU = def.sU;
   const unit = { x: new V3(1, 0, 0), y: new V3(0, 1, 0), z: new V3(0, 0, 1) };
   const fwd = unit[Lax].clone().multiplyScalar(sF), up = unit[Hax].clone().multiplyScalar(sU);
   const right = new V3().crossVectors(up, fwd);
@@ -1079,8 +1100,11 @@ function buildTemplate(root, def, key) {
   holder.quaternion.setFromRotationMatrix(Rm);
   if (FLIP.has(key)) holder.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(unit.y, Math.PI));
   if (UPSIDE.has(key)) holder.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(unit.z, Math.PI));
+  // manual correction (degrees) applied AFTER the auto-upright: rot[0]=pitch (nose up/down), rot[1]=yaw (180 = swap front/back), rot[2]=roll (180 = upside-down, 90 = on its side)
+  const _r = ROT[key] || def.rot || [0, 0, 0];
+  if (_r[0] || _r[1] || _r[2]) holder.quaternion.premultiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(_r[0] * Math.PI / 180, _r[1] * Math.PI / 180, _r[2] * Math.PI / 180, 'XYZ')));
   const wrap = new THREE.Group(); wrap.add(holder); wrap.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(wrap, true);
+  const box = posedBox(wrap);
   const size = box.getSize(new V3()), ctr = box.getCenter(new V3());
   holder.position.set(-ctr.x, -box.min.y, -ctr.z);
   const s = def.length / Math.max(size.z, 1e-4);
