@@ -338,6 +338,22 @@
     color:var(--p1-core); font-size:12px; letter-spacing:3px; text-transform:uppercase; opacity:0; transition:opacity .3s;
     text-shadow:0 0 10px var(--p1-glow); text-align:center; padding:0 12px; }
   #cam-hint.show { opacity:1; }
+  /* nitro boost HUD + screen FX */
+  #boost-fx { position:fixed; inset:0; z-index:5; pointer-events:none; opacity:0; will-change:opacity,transform;
+    box-shadow:inset 0 0 140px 30px var(--p1-glow);
+    background:repeating-conic-gradient(from 0deg at 50% 50%, rgba(255,255,255,0) 0deg 5deg, rgba(255,255,255,.07) 5.4deg 5.8deg);
+    -webkit-mask-image:radial-gradient(circle at 50% 50%, transparent 38%, #000 95%); mask-image:radial-gradient(circle at 50% 50%, transparent 38%, #000 95%); }
+  #cam-flash { position:fixed; inset:0; z-index:8; pointer-events:none; opacity:0;
+    background:radial-gradient(circle at 50% 50%, transparent 35%, rgba(0,0,0,.55) 100%); }
+  #cam-flash.go { animation:camflash .75s ease-out; }
+  @keyframes camflash { 0% { opacity:0; } 25% { opacity:1; } 100% { opacity:0; } }
+  #boost-hud { position:fixed; left:50%; bottom:92px; transform:translateX(-50%); z-index:7; pointer-events:none; display:none; text-align:center;
+    font-size:11px; letter-spacing:3px; color:var(--p1-core); text-shadow:0 0 8px var(--p1-glow); }
+  #boost-hud.show { display:block; }
+  #boost-bar { width:180px; height:5px; margin:6px auto 0; border:1px solid rgba(109,255,184,.45); border-radius:3px; background:rgba(0,0,0,.45); overflow:hidden; }
+  #boost-fill { height:100%; width:100%; background:var(--p1-core); box-shadow:0 0 10px var(--p1-glow); }
+  #boost-hud[data-state="active"] { color:#fff; } #boost-hud[data-state="active"] #boost-fill { background:#fff; }
+  #boost-hud[data-state="cool"] { opacity:.6; } #boost-hud[data-state="cool"] #boost-fill { background:rgba(109,255,184,.5); box-shadow:none; }
   #btn-cam { position:fixed; top:8px; right:48px; z-index:9; width:32px; height:32px; font-size:15px; cursor:pointer;
     background:rgba(22,255,140,.1); border:1px solid rgba(109,255,184,.5); border-radius:6px; color:var(--p1-core); }
   #load-status { font-size:11px; letter-spacing:4px; color:var(--p1-core); opacity:.75; margin:-6px 0 18px; text-transform:uppercase; }
@@ -485,6 +501,9 @@
 
 <div id="fatal" class="hidden"></div>
 <div id="cam-hint"></div>
+<div id="boost-fx"></div>
+<div id="cam-flash"></div>
+<div id="boost-hud" data-state="ready"><span id="boost-label">DOUBLE-TAP ↑ FOR NITRO</span><div id="boost-bar"><div id="boost-fill"></div></div></div>
 <canvas id="minimap" width="224" height="128"></canvas>
 <button id="btn-cam" title="Camera (V)">&#127909;</button>
 <div class="overlay hidden" id="loading-overlay"><h1 style="font-size:30px;">LOADING GRID</h1><div class="sub">streaming light-cycle models&hellip;</div></div>
@@ -520,6 +539,7 @@
     <div class="sp-body hidden" id="tab-controls">
       <div class="srow"><span>Steer (follow / overview cam)</span><span><kbd>&#8592;</kbd><kbd>&#8593;</kbd><kbd>&#8595;</kbd><kbd>&#8594;</kbd> / <kbd>WASD</kbd></span></div>
       <div class="srow"><span>Steer (chase cam)</span><span><kbd>&#8592;</kbd><kbd>&#8594;</kbd> / <kbd>A</kbd><kbd>D</kbd> relative</span></div>
+      <div class="srow"><span>Nitro boost (single player)</span><span>double-tap <kbd>&#8593;</kbd></span></div>
       <div class="srow"><span>Change camera</span><span><kbd>V</kbd></span></div>
       <div class="srow"><span>Pause / resume</span><span><kbd>Space</kbd></span></div>
       <div class="srow"><span>Retry / next level (after a round)</span><span><kbd>Space</kbd></span></div>
@@ -578,7 +598,7 @@
       <div><kbd>V</kbd> follow / chase / overview</div>
     </div>
   </div>
-  <div id="credits">Zecom™ &mdash;</div>
+  <div id="credits">3D models via Sketchfab &mdash; Super Lightcycle, Willow's Lightcycle, Lightcycle Arena &amp; Tron Race Arena by SpringSociety (CC BY 4.0) &middot; Argon City Light Cycle by TheTinDog (CC BY 4.0) &middot; Elite/Black Guard Lightcycle by Shriker1 (CC BY 4.0) &middot; Agile Lightcycle by Shriker1</div>
 </div>
 
 <!-- Color select overlay (2-player mode) -->
@@ -735,7 +755,8 @@ const AudioEngine = (() => {
     twoNikWin: './audio/two_nik.mp3',
     nexOneWin: './audio/nex-one_win.mp3',
     kra1Win: './audio/kra-1_win.mp3',
-    nexOneV2Win: './audio/nex-one_ver_2.mp3'
+    nexOneV2Win: './audio/nex-one_ver_2.mp3',
+    nitro: './audio/nitro.wav'
   };
 
   function playCustom(name) {
@@ -808,6 +829,32 @@ const AudioEngine = (() => {
     src.start(t);
   }
 
+  // ---- bike engine (only audible while the nitro boost is active) ----
+  let eng = null;
+  function ensureEngine() {
+    if (eng || !ctx) return;
+    const g = ctx.createGain(); g.gain.value = 0;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 4;
+    const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 60;
+    const o2 = ctx.createOscillator(); o2.type = 'square';   o2.frequency.value = 30;
+    const o3 = ctx.createOscillator(); o3.type = 'sawtooth'; o3.frequency.value = 121; o3.detune.value = 9;
+    const g3 = ctx.createGain(); g3.gain.value = 0.35;
+    const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 24;
+    const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 0.05; lfo.connect(lfoAmt); lfoAmt.connect(g.gain);
+    o1.connect(lp); o2.connect(lp); o3.connect(g3); g3.connect(lp); lp.connect(g); g.connect(sfxGain);
+    [o1, o2, o3, lfo].forEach(o => o.start());
+    eng = { g, lp, o1, o2, o3, lfo };
+  }
+  function engineSet(level) {
+    if (level <= 0 && !eng) return;
+    ensureCtx(); ensureEngine(); if (!eng) return;
+    const t = ctx.currentTime, f = 56 + level * 210;
+    eng.o1.frequency.setTargetAtTime(f, t, 0.05); eng.o2.frequency.setTargetAtTime(f / 2, t, 0.05); eng.o3.frequency.setTargetAtTime(f * 2.01, t, 0.05);
+    eng.lp.frequency.setTargetAtTime(380 + level * 2800, t, 0.06);
+    eng.lfo.frequency.setTargetAtTime(18 + level * 44, t, 0.08);
+    eng.g.gain.setTargetAtTime(level > 0.001 ? 0.10 + 0.24 * level : 0, t, level > 0.001 ? 0.05 : 0.12);
+  }
+
   return {
     ensureCtx, startMusic, stopMusic, toggleMute, isMuted: () => muted,
     setMuted(m) { muted = !!m; if (ctx) masterGain.gain.setTargetAtTime(muted ? 0 : vol.master, ctx.currentTime, 0.05); },
@@ -821,6 +868,12 @@ const AudioEngine = (() => {
       else if (name === 'Nex-One.v2') playCustom('nexOneV2Win');
       else if (name === 'KRA-1 MK.II' || name === 'KRA-1 MK.III') playCustom('kra1Win');
     },
+    engineSet,
+    // sharp twist-of-the-throttle: intake whoosh + rising scream + sub thump + backfire crackle
+    boostKick() { playCustom('nitro'); },
+    boostEnd() { sweep(520, 120, 0.35, 'sawtooth', 0.18); setTimeout(() => noiseBurst(0.12, 0.22), 120); setTimeout(() => noiseBurst(0.08, 0.18), 230); },
+    boostDenied() { blip(170, 0.07, 'square', 0.12); },
+    camSwish() { sweep(260, 1500, 0.22, 'triangle', 0.12); noiseBurst(0.18, 0.14); },
     turn() { blip(880, 0.045, 'square', 0.16); },
     click() { blip(520, 0.06, 'square', 0.22); },
     countdown() { blip(660, 0.1, 'square', 0.28); },
@@ -886,9 +939,9 @@ const DPR = window.devicePixelRatio || 1;
 const COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
 const GFX_PRESETS = {
   low:    { res: 0.5,  bloom: false, bloomStrength: 0.6,  msaa: 0, particles: 0.4, skyline: false, scenery: false, lights: false },
-  medium: { res: 0.75, bloom: true,  bloomStrength: 0.7,  msaa: 0, particles: 0.7, skyline: true,  scenery: false, lights: true },
-  high:   { res: 1,    bloom: true,  bloomStrength: 0.9,  msaa: 4, particles: 1,   skyline: true,  scenery: true,  lights: true },
-  ultra:  { res: 1.25, bloom: true,  bloomStrength: 1.05, msaa: 4, particles: 1.4, skyline: true,  scenery: true,  lights: true },
+  medium: { res: 0.75, bloom: false,  bloomStrength: 0.7,  msaa: 0, particles: 0.7, skyline: true,  scenery: false, lights: true },
+  high:   { res: 1,    bloom: false,  bloomStrength: 0.9,  msaa: 4, particles: 1,   skyline: true,  scenery: true,  lights: true },
+  ultra:  { res: 1.25, bloom: false,  bloomStrength: 1.05, msaa: 4, particles: 1.4, skyline: true,  scenery: true,  lights: true },
 };
 const S = { master: 1, music: 1, sfx: 1, voice: 1, muted: false, preset: COARSE ? 'medium' : 'high', g: null, minimap: true, fps: false, autoQ: true };
 S.g = Object.assign({}, GFX_PRESETS[S.preset]);
@@ -897,6 +950,8 @@ try {
   if (raw) { const o = JSON.parse(raw); Object.assign(S, o); S.g = Object.assign({}, GFX_PRESETS.high, o.g || {}); }
 } catch (e) {}
 function saveSettings() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {} }
+// bloom is OFF by default for everyone (one-time switch for already-saved settings; can still be re-enabled in Settings / B key)
+if (!S.bloomOffV3) { S.g.bloom = false; S.bloomOffV3 = true; saveSettings(); }
 function prFor(res) { return Math.max(0.5, Math.min(DPR * res, res > 1 ? 2 : 1.5)); }
 let gfxParticles = S.g.particles;
 let inspecting = false;
@@ -1554,7 +1609,12 @@ function clearVisuals() {
 function updateBikeVisual(b, dt, alpha) {
   const v = b.vis; if (!v) return;
   if (!b.alive) { v.ribbon.endHead(); return; }
-  const gx = b.px + (b.x - b.px) * alpha, gy = b.py + (b.y - b.py) * alpha;
+  let gx, gy;
+  if (b.boostTick) { // two cells this tick: first half A->B, second half B->C
+    const m = b.mid;
+    if (alpha < 0.5 || !m) { const a = Math.min(1, alpha * 2), tx = m ? m.x : b.x, ty = m ? m.y : b.y; gx = b.px + (tx - b.px) * a; gy = b.py + (ty - b.py) * a; }
+    else { const a = (alpha - 0.5) * 2; gx = m.x + (b.x - m.x) * a; gy = m.y + (b.y - m.y) * a; }
+  } else { gx = b.px + (b.x - b.px) * alpha; gy = b.py + (b.y - b.py) * alpha; }
   const X = wx(gx), Z = wz(gy);
   v.group.position.set(X, 0, Z);
   const target = Math.atan2(b.dir.x, b.dir.y);
@@ -1565,6 +1625,13 @@ function updateBikeVisual(b, dt, alpha) {
   const leanT = clamp(-yawRate * 0.07, -0.55, 0.55);
   v.leanV += (leanT - v.leanV) * (1 - Math.exp(-dt * 10));
   v.leanG.rotation.z = v.leanV;
+  if (b === p1) { // throttle-kick feel: forward jolt, nose-up pitch, brighter glow, exhaust sparks
+    const lv = BOOST.level;
+    v.leanG.position.z = BOOST.jx; v.leanG.rotation.x = -BOOST.pp;
+    v.glow.material.opacity = 0.28 + 0.5 * lv;
+    if (v.light) v.light.intensity = 1.6 + 3.2 * lv;
+    
+  }
   v.ribbon.setHead(X, Z, simSec() - 0.14);
 }
 function derezz(b) {
@@ -1582,28 +1649,114 @@ function derezz(b) {
 // =====================================================================
 //  CAMERA
 // =====================================================================
-let camMode = 0; // 0 follow (fixed heading), 1 chase (relative steering), 2 overview
-const CAM_NAMES = ['FOLLOW CAM — steer with arrows / WASD', 'CHASE CAM — LEFT / RIGHT turn relative to your bike', 'OVERVIEW CAM — whole arena'];
+// ---------------------------------------------------------------------
+//  NITRO BOOST  (double-tap the Up Arrow)
+//  A boosted bike takes extra grid steps between the normal ticks, so only the
+//  player gets faster - the rules / AI / collisions all stay cell-exact.
+// ---------------------------------------------------------------------
+const BOOST = {
+  active: false, t: 0, level: 0, mul: 1, peak: 1.5, atk: 0.14, hold: 0.3, decay: 0.6, cd: 0, cdMax: 5.4, carry: 0, engineOn: false,
+  jx: 0, jv: 0, pp: 0, pv: 0, camKick: 0, camKickV: 0, fovPunch: 0, fovV: 0, lastUp: -1e9,
+};
+BOOST.total = BOOST.atk + BOOST.hold + BOOST.decay;
+const BOOST_TAP_MIN = 45, BOOST_TAP_MAX = 260; // ms allowed between the two presses (min filters key-bounce)
+function resetBoost() {
+  BOOST.active = false; BOOST.t = 0; BOOST.level = 0; BOOST.mul = 1; BOOST.cd = 0; BOOST.carry = 0; BOOST.lastUp = -1e9;
+  BOOST.jx = BOOST.jv = BOOST.pp = BOOST.pv = BOOST.camKick = BOOST.camKickV = BOOST.fovPunch = BOOST.fovV = 0;
+  if (BOOST.engineOn) { AudioEngine.engineSet(0); BOOST.engineOn = false; }
+}
+function triggerBoost() {
+  if (gameMode !== 'single' || !started || !running || paused || !p1 || !p1.alive) return false;
+  if (BOOST.active || BOOST.cd > 0) return false;
+  BOOST.active = true; BOOST.t = 0; BOOST.carry = 0.5;
+  BOOST.jx = -0.7; BOOST.jv = 30;      // bike squats back, then lunges forward
+  BOOST.pv = 3.4;                      // nose pitches up
+  BOOST.camKickV = 42; BOOST.fovV = 120; // camera snaps back + FOV punch
+  shake = Math.max(shake, 0.55);
+  const X = p1.vis ? p1.vis.group.position.x : 0, Z = p1.vis ? p1.vis.group.position.z : 0;
+  AudioEngine.boostKick();
+  return true;
+}
+// steersNow = this Up press would also turn the bike (follow/overview cams), so it can't be the 2nd tap of a boost.
+function boostTap(steersNow) {
+  const now = performance.now(), gap = now - BOOST.lastUp;
+  if (!steersNow && gap >= BOOST_TAP_MIN && gap <= BOOST_TAP_MAX) {
+    BOOST.lastUp = -1e9;
+    if (!triggerBoost() && gameMode === 'single' && running && !paused) AudioEngine.boostDenied();
+  } else BOOST.lastUp = now;
+}
+function updateBoost(dt) {
+  if (BOOST.cd > 0) BOOST.cd = Math.max(0, BOOST.cd - dt);
+  if (!BOOST.active) return;
+  if (!p1 || !p1.alive || gameMode !== 'single') { resetBoost(); return; }
+  BOOST.t += dt;
+  const t = BOOST.t, B = BOOST;
+  let lv;
+  if (t < B.atk) { const u = t / B.atk; lv = 1 - (1 - u) * (1 - u); }        // instant kick
+  else if (t < B.atk + B.hold) lv = 1;                                           // full power
+  else if (t < B.total) lv = 0.5 + 0.5 * Math.cos(Math.PI * (t - B.atk - B.hold) / B.decay); // smooth return
+  else lv = 0;
+  B.level = lv; B.mul = 1 + (B.peak - 1) * lv;
+  if (t >= B.total) { B.active = false; B.level = 0; B.mul = 1; B.cd = B.cdMax; }
+}
+function updateBoostFx(dt) {
+  dt = Math.min(dt, 0.033); const B = BOOST;
+  B.jv += ((0 - B.jx) * 150 - B.jv * 11) * dt; B.jx += B.jv * dt;
+  B.pv += ((0.04 * B.level - B.pp) * 95 - B.pv * 9) * dt; B.pp += B.pv * dt;
+  B.camKickV += ((0 - B.camKick) * 70 - B.camKickV * 8.5) * dt; B.camKick += B.camKickV * dt;
+  B.fovV += ((0 - B.fovPunch) * 80 - B.fovV * 9) * dt; B.fovPunch += B.fovV * dt;
+}
+let _bhState = '';
+function updateBoostHud() {
+  const hud = $('boost-hud'), fx = $('boost-fx'); if (!hud || !fx) return;
+  const show = started && running && gameMode === 'single' && !inspecting;
+  hud.classList.toggle('show', show);
+  fx.style.opacity = show ? (BOOST.level * 0.9).toFixed(3) : '0';
+  fx.style.transform = 'scale(' + (1 + BOOST.level * 0.06).toFixed(3) + ')';
+  if (!show) return;
+  let st, pct, label;
+  if (BOOST.active) { st = 'active'; pct = 1 - BOOST.t / BOOST.total; label = 'NITRO'; }
+  else if (BOOST.cd > 0) { st = 'cool'; pct = 1 - BOOST.cd / BOOST.cdMax; label = 'RECHARGING'; }
+  else { st = 'ready'; pct = 1; label = 'DOUBLE-TAP \u2191 FOR NITRO'; }
+  $('boost-fill').style.width = (clamp(pct, 0, 1) * 100).toFixed(1) + '%';
+  if (st !== _bhState) { _bhState = st; hud.dataset.state = st; $('boost-label').textContent = label; }
+}
+
+// =====================================================================
+//  CAMERA
+// =====================================================================
+let camMode = 1; // 0 follow (fixed heading), 1 chase = 3rd person behind the bike (DEFAULT), 2 overview
+const CAM_NAMES = ['FOLLOW CAM \u2014 steer with arrows / WASD', 'CHASE CAM \u2014 LEFT / RIGHT turn relative to your bike \u00b7 double-tap \u2191 for nitro', 'OVERVIEW CAM \u2014 whole arena'];
 const camPos = new THREE.Vector3(0, 60, 80), camLook = new THREE.Vector3();
 let realT = 0, camHintTimer = null;
+const CAMX = { blendT: 1, blendDur: 1, dir: 1, fromPos: new THREE.Vector3(), fromLook: new THREE.Vector3(), fromFov: 55, lastYaw: 0, yawRate: 0, roll: 0, sway: 0 };
+const _outPos = new THREE.Vector3(), _outLook = new THREE.Vector3(), _fwd = new THREE.Vector3();
 function showCamHint() {
   const el = $('cam-hint'); if (!el) return;
-  el.textContent = 'V — ' + (gameMode === 'multi' ? 'OVERVIEW CAM' : CAM_NAMES[camMode]);
+  el.textContent = 'V \u2014 ' + (gameMode === 'multi' ? 'OVERVIEW CAM' : CAM_NAMES[camMode]);
   el.classList.add('show'); clearTimeout(camHintTimer); camHintTimer = setTimeout(() => el.classList.remove('show'), 2600);
   $('touch-controls').classList.toggle('chase', camMode === 1 && gameMode === 'single');
 }
+// cinematic blend from wherever the camera is now to the new camera's framing
+function camTransition(dur, quiet) {
+  camera.getWorldDirection(_fwd);
+  CAMX.fromPos.copy(camera.position); CAMX.fromLook.copy(camera.position).addScaledVector(_fwd, 40);
+  CAMX.fromFov = camera.fov; CAMX.blendT = 0; CAMX.blendDur = dur || 0.9; CAMX.dir = -CAMX.dir;
+  if (!quiet) { const fl = $('cam-flash'); if (fl) { fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go'); } }
+}
 function cycleCamera() {
   if (gameMode === 'multi') return;
-  camMode = (camMode + 1) % 3; showCamHint();
+  camMode = (camMode + 1) % 3; camTransition(0.95); AudioEngine.camSwish(); showCamHint();
 }
 const _tgt = new THREE.Vector3(), _lk = new THREE.Vector3(), _zero = new THREE.Vector3();
 function updateCamera(dt) {
   const tgt = _tgt, lk = _lk;
-  let fov = 55;
+  let fov = 55, roll = 0;
+  const lv = BOOST.level;
   if (!started) {
     const t = realT * 0.08;
     tgt.set(Math.sin(t) * 150, 62, Math.cos(t) * 150); lk.set(0, 6, 0);
-    camPos.copy(tgt); camLook.copy(lk);
+    camPos.copy(tgt); camLook.copy(lk); CAMX.blendT = 1;
   } else {
     const mode = gameMode === 'multi' ? 2 : camMode;
     const pv = (p1 && p1.vis) ? p1.vis.group.position : _zero;
@@ -1611,24 +1764,51 @@ function updateCamera(dt) {
       const hx = p1 && p1.alive ? p1.dir.x : 0, hz = p1 && p1.alive ? p1.dir.y : 0;
       tgt.set(pv.x + hx * 4, 46, pv.z + 36 + hz * 4); lk.set(pv.x + hx * 10, 0, pv.z - 6 + hz * 10);
       const f = 1 - Math.exp(-dt * 4.5); camPos.lerp(tgt, f); camLook.lerp(lk, f);
+      fov = 55 + 9 * lv + BOOST.fovPunch;
     } else if (mode === 1) {
+      // ---- dynamic AAA chase cam: spring-lagged follow, swings out + looks into turns, banks, speed-FOV, handheld sway ----
       const yaw = p1 && p1.vis ? p1.vis.yaw : 0; const fx = Math.sin(yaw), fz = Math.cos(yaw);
-      tgt.set(pv.x - fx * 13, 6.8, pv.z - fz * 13); lk.set(pv.x + fx * 16, 1.6, pv.z + fz * 16);
-      fov = 68;
-      const f = 1 - Math.exp(-dt * 7); camPos.lerp(tgt, f); camLook.lerp(lk, f);
+      let dy = yaw - CAMX.lastYaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); CAMX.lastYaw = yaw;
+      CAMX.yawRate += (dy / Math.max(dt, 1e-3) - CAMX.yawRate) * (1 - Math.exp(-dt * 8));
+      const yr = clamp(CAMX.yawRate, -6, 6);
+      const dist = 12.5 + 6.5 * lv + BOOST.camKick, h = 6.2 - 1.3 * lv;
+      CAMX.sway += dt * (1.3 + 3 * lv);
+      const swX = Math.sin(CAMX.sway * 1.7) * (0.06 + 0.10 * lv), swY = Math.sin(CAMX.sway * 2.3 + 1) * (0.05 + 0.09 * lv);
+      const rx = -fz, rz = fx; // bike's right-hand vector
+      tgt.set(pv.x - fx * dist + rx * (swX + yr * 0.6), h + swY, pv.z - fz * dist + rz * (swX + yr * 0.6));
+      lk.set(pv.x + fx * 17 - rx * yr * 0.8, 1.6 + 0.3 * lv, pv.z + fz * 17 - rz * yr * 0.8);
+      const fp = 1 - Math.exp(-dt * (7 + 3 * lv)), fl = 1 - Math.exp(-dt * 10);
+      camPos.lerp(tgt, fp); camLook.lerp(lk, fl);
+      CAMX.roll += (clamp(CAMX.yawRate * 0.012, -0.07, 0.07) - CAMX.roll) * (1 - Math.exp(-dt * 6));
+      roll = CAMX.roll;
+      fov = 66 + 14 * lv + BOOST.fovPunch + clamp(Math.abs(yr) * 0.4, 0, 2);
     } else {
-      fov = 46;
-      const hh = Math.tan(THREE.MathUtils.degToRad(fov) / 2), hw = hh * camera.aspect;
+      fov = 46 + 6 * lv + BOOST.fovPunch * 0.5;
+      const hh = Math.tan(THREE.MathUtils.degToRad(46) / 2), hw = hh * camera.aspect;
       const dist = Math.max((D / 2) / hh, (W / 2) / hw) * 1.1;
       const tilt = THREE.MathUtils.degToRad(64);
       tgt.set(0, Math.sin(tilt) * dist, Math.cos(tilt) * dist * 0.9); lk.set(0, 0, 3);
       const f = 1 - Math.exp(-dt * 4); camPos.lerp(tgt, f); camLook.lerp(lk, f);
     }
   }
-  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 6); camera.updateProjectionMatrix(); }
-  camera.position.copy(camPos);
+  _outPos.copy(camPos); _outLook.copy(camLook);
+  let outFov = fov, blending = false;
+  if (CAMX.blendT < 1) {
+    blending = true;
+    CAMX.blendT = Math.min(1, CAMX.blendT + dt / CAMX.blendDur);
+    const t = CAMX.blendT, e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // ease in-out cubic
+    const arc = Math.sin(Math.PI * e);
+    _outPos.lerpVectors(CAMX.fromPos, camPos, e); _outPos.y += arc * 9;                 // sweep up and over
+    _outLook.lerpVectors(CAMX.fromLook, camLook, e);
+    outFov = CAMX.fromFov + (fov - CAMX.fromFov) * e + arc * 9;                          // dolly-zoom punch
+    roll += arc * 0.09 * CAMX.dir;                                                      // whip-roll
+  }
+  if (Math.abs(camera.fov - outFov) > 0.05) { camera.fov += (outFov - camera.fov) * Math.min(1, dt * (blending ? 16 : 9)); camera.updateProjectionMatrix(); }
+  camera.position.copy(_outPos);
+  if (lv > 0.05) { const r = 0.10 * lv; camera.position.x += (Math.random() - 0.5) * r; camera.position.y += (Math.random() - 0.5) * r; camera.position.z += (Math.random() - 0.5) * r; }
   if (shake > 0.01) { camera.position.x += (Math.random() - 0.5) * shake * 2.2; camera.position.y += (Math.random() - 0.5) * shake * 1.6; camera.position.z += (Math.random() - 0.5) * shake * 2.2; shake *= Math.exp(-dt * 5); }
-  camera.lookAt(camLook);
+  camera.lookAt(_outLook);
+  if (roll) camera.rotateZ(roll);
 }
 
 // =====================================================================
@@ -1911,7 +2091,7 @@ function destroyDecoy(dec) {
     decoyState.identified = true; setTimeout(() => showDecoyToast('TARGET SIGNATURE CONFIRMED', 2000), 650);
   }
 }
-function resolveDecoyCollisions(now, previousPlayer) {
+function resolveDecoyCollisions(now, previousPlayer, skipTrail) {
   if (!decoyState) return;
   decoyState.decoys.forEach(dec => {
     if (!dec.alive) return;
@@ -1920,7 +2100,7 @@ function resolveDecoyCollisions(now, previousPlayer) {
     const playerMovedIntoFake = same && previousPlayer && (previousPlayer.x !== p1.x || previousPlayer.y !== p1.y);
     if (playerMovedIntoFake && !fakeMovedIntoPlayer) { destroyDecoy(dec); return; }
     if (fakeMovedIntoPlayer) { damagePlayer(LEVELS[level].decoyDamage || 15); return; }
-    pushTrail(dec, now);
+    if (!skipTrail) pushTrail(dec, now);
   });
 }
 
@@ -2048,6 +2228,7 @@ function resetRound(freshLevel) {
   $('end-overlay').classList.add('hidden'); $('victory-overlay').classList.add('hidden');
   $('minimap').classList.add('show');
   running = true; paused = false;
+  resetBoost(); camTransition(1.1, true); CAMX.lastYaw = p1.vis ? p1.vis.yaw : 0; CAMX.yawRate = 0;
   showCamHint();
 }
 
@@ -2077,6 +2258,9 @@ window.addEventListener('keydown', (e) => {
   if (e.key === ' ') { togglePause(); return; }
   if (e.key === 'v' || e.key === 'V') { cycleCamera(); return; }
   if (e.key === 'b' || e.key === 'B') { bloomOn = !bloomOn; S.g.bloom = bloomOn; syncPreset(); saveSettings(); refreshSettingsUI(); return; }
+  if (e.key === 'ArrowUp' && !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey && gameMode === 'single') {
+    boostTap(!chaseSteering() && !!p1 && p1.nextDir !== DIRS.UP);
+  }
   if (gameMode === 'multi') {
     switch (e.key) {
       case 'w': case 'W': queueDir(p1, DIRS.UP); break; case 's': case 'S': queueDir(p1, DIRS.DOWN); break;
@@ -2101,7 +2285,11 @@ const isTouch = matchMedia('(pointer: coarse)').matches;
 if (isTouch) $('touch-controls').classList.add('active');
 const bindTouch = (id, dir, side) => {
   const el = $(id);
-  const fire = () => { if (!started) return; if (chaseSteering()) { if (side) relTurn(p1, side); } else queueDir(p1, dir); };
+  const fire = () => {
+    if (!started) return;
+    if (id === 'tc-up' && gameMode === 'single') boostTap(!chaseSteering() && !!p1 && p1.nextDir !== DIRS.UP);
+    if (chaseSteering()) { if (side) relTurn(p1, side); } else queueDir(p1, dir);
+  };
   el.addEventListener('touchstart', e => { e.preventDefault(); fire(); }, { passive: false });
   el.addEventListener('mousedown', fire);
 };
@@ -2509,11 +2697,32 @@ function prunePlayerTrail(now) {
   for (const pt of expired) { const id = idx(pt.x, pt.y); if (occupied[id] === 1) occupied[id] = 0; }
 }
 
+// extra player-only grid step used by the nitro boost (mirrors the player part of step())
+function p1ExtraStep() {
+  if (!p1 || !p1.alive || !running) return;
+  const now = simNow, from = { x: p1.x, y: p1.y };
+  p1.mid = from; p1.dir = p1.nextDir;
+  p1.x += p1.dir.x; p1.y += p1.dir.y;
+  if (!inBounds(p1.x, p1.y) || occupied[idx(p1.x, p1.y)] !== 0) p1.alive = false;
+  if (p1.alive) { occupied[idx(p1.x, p1.y)] = 1; pushTrail(p1, now); }
+  if (isDecoyLevel() && decoyState) {
+    decoyState.decoys.forEach(dd => { if (dd.alive) { dd.prevX = dd.x; dd.prevY = dd.y; } }); // decoys did not move in this half-step
+    resolveDecoyCollisions(now, from, true); updatePlayerHealth();
+  }
+  if (!p1.alive) { const last = p1.trail[p1.trail.length - 1]; if (!last.exploded) { explode(p1); last.exploded = true; } }
+  mmUpdate();
+  if (!p1.alive) endRound();
+}
+function flushP1Extra() { if (p1 && p1.boostTick && !p1.extraDone) { p1.extraDone = true; p1ExtraStep(); } }
 function step() {
   const trioLevel = gameMode === 'single' && LEVELS[level].trio;
   if (!p1.alive && (!trioLevel ? !p2.alive : [p2, p3, p4].every(b => !b || !b.alive))) return;
   const now = simNow;
   const previousPlayer = { x: p1.x, y: p1.y };
+  // nitro: decide whether the player gets an extra half-tick cell this tick (fractional multiplier -> smooth ramp up/down)
+  p1.mid = null; p1.boostTick = false;
+  if (BOOST.active && gameMode === 'single') { BOOST.carry += BOOST.mul - 1; if (BOOST.carry >= 1) { BOOST.carry -= 1; p1.boostTick = true; } }
+  p1.extraDone = !p1.boostTick;
   [p1, p2, p3, p4].forEach(b => { if (b) { b.px = b.x; b.py = b.y; } });
   if (isDecoyLevel() && decoyState) decoyState.decoys.forEach(dec => { dec.prevX = dec.x; dec.prevY = dec.y; dec.px = dec.x; dec.py = dec.y; });
   const trioPreviousHeads = trioLevel ? [p2, p3, p4].filter(Boolean).map(b => ({ x: b.x, y: b.y })) : [];
@@ -2576,7 +2785,7 @@ function step() {
 }
 
 function endRound() {
-  running = false;
+  running = false; resetBoost();
   const restartBtn = $('btn-restart'), menuBtn = $('btn-menu');
   if (gameMode === 'multi') {
     $('level-badge').textContent = 'LOCAL DUEL';
@@ -2628,9 +2837,11 @@ function frame(t) {
   const dt = Math.min(0.05, Math.max(0.001, (t - lastT) / 1000 || 0.016)); lastT = t; realT += dt;
   if (started && running && !paused) {
     simNow += dt * 1000; acc += dt * 1000;
+    updateBoost(dt);
     let guard = 0;
-    while (acc >= tickMs && guard++ < 4 && running) { acc -= tickMs; step(); }
-  }
+    while (acc >= tickMs && guard++ < 4 && running) { acc -= tickMs; flushP1Extra(); if (running) step(); }
+    if (running && p1 && p1.boostTick && !p1.extraDone && acc >= tickMs * 0.5) { p1.extraDone = true; p1ExtraStep(); }
+  } else if (BOOST.engineOn) { AudioEngine.engineSet(0); BOOST.engineOn = false; }
   curAlpha = (started && running) ? clamp(acc / tickMs, 0, 1) : 1;
   SHARED.uSim.value = simSec(); SHARED.uScroll.value = realT;
   uiTick(dt);
@@ -2643,6 +2854,7 @@ function frame(t) {
     mmDraw(curAlpha);
   }
   particles3d.update(dt); updateRings(dt);
+  updateBoostFx(dt); updateBoostHud();
   updateCamera(dt); adaptQuality(dt);
   renderNow();
 }
@@ -2703,7 +2915,7 @@ $('btn-1p').addEventListener('click', async () => {
   $('start-overlay').classList.add('hidden');
   if (loadedCount < loadTotal) { $('loading-overlay').classList.remove('hidden'); await waitForAssets(); $('loading-overlay').classList.add('hidden'); }
   scoreP1 = 0; scoreP2 = 0; $('score-p1').textContent = 0; $('score-p2').textContent = 0;
-  started = true; level = 0; camMode = 0; resetRound(true);
+  started = true; level = 0; camMode = 1; resetRound(true);
 });
 $('btn-2p').addEventListener('click', () => {
   AudioEngine.click(); AudioEngine.startMusic();
@@ -3054,7 +3266,7 @@ buildSettingsUI();
 applyAudio();
 applyGraphics();
 
-if (params.get('debug')) window.__grid = { setLevel(n) { level = n; resetRound(true); }, state: () => ({ level, running, p1alive: p1 && p1.alive, p2alive: p2 && p2.alive, hp: playerHealth, decoys: decoyState ? decoyState.decoys.length : 0, walls: trapState ? trapState.walls.length : 0 }) };
+if (params.get('debug')) window.__grid = { setLevel(n) { level = n; resetRound(true); }, boost: () => ({ active: BOOST.active, level: +BOOST.level.toFixed(2), cd: +BOOST.cd.toFixed(2), simNow, running, camMode, fov: +camera.fov.toFixed(1), bloomOn, p1: p1 && { x: p1.x, y: p1.y, alive: p1.alive } }), state: () => ({ level, running, p1alive: p1 && p1.alive, p2alive: p2 && p2.alive, hp: playerHealth, decoys: decoyState ? decoyState.decoys.length : 0, walls: trapState ? trapState.walls.length : 0 }) };
 requestAnimationFrame(frame);
 })();
 
